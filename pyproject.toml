@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "artificial-evolution"
+version = "0.1.0"
+description = "A 2D ecosystem evolving bodies and recurrent neural brains."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["numpy>=2.2,<3", "pygame-ce>=2.5,<3", "pymunk>=7.1,<8"]
+
+[project.scripts]
+artificial-evolution = "artificial_evolution.__main__:main"
+
+[dependency-groups]
+dev = ["pytest>=8,<10", "ruff>=0.12,<1"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [".uv-cache"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
