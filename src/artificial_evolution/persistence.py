@@ -10,7 +10,7 @@ from .ecology import Food
 from .genome import ACTIONS, INPUTS, MAX_SEGMENTS, MEMORY, Genome, Segment
 from .simulation import Simulation
 
-VERSION = 1
+VERSION = 3
 WEIGHTS = ("input_weights", "recurrent_weights", "output_weights", "hidden_bias", "output_bias")
 
 
@@ -44,6 +44,7 @@ def snapshot(sim: Simulation) -> dict:
     return {
         "version": VERSION,
         "seed": sim.seed,
+        "brain_source": sim.brain_source,
         "tick": sim.tick,
         "next_id": sim.next_id,
         "max_population": sim.max_population,
@@ -89,12 +90,17 @@ def save(sim: Simulation, path: str | Path) -> None:
 
 def load(path: str | Path) -> Simulation:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
-    if data.get("version") != VERSION:
+    if data.get("version") not in (1, 2, VERSION):
         raise ValueError("Unsupported save version")
     sim = Simulation(
-        seed=data["seed"], population=0, plants=0, max_population=data["max_population"]
+        seed=data["seed"],
+        population=0,
+        plants=0,
+        max_population=data["max_population"],
+        brain="random",
     )
     sim.ancestor = decode_genome(data["ancestor"])
+    sim.brain_source = data.get("brain_source", "random")
     for record in data["creatures"]:
         sim.next_id = record["id"]
         creature = sim.add_creature(

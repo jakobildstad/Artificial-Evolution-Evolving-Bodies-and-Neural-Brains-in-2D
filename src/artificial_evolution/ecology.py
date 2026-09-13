@@ -12,7 +12,8 @@ WIDTH, HEIGHT = 1000, 700
 DT = 1 / 60
 SIGHT = 180.0
 FOOD_CAPACITY = 22.0
-REGROWTH = 0.24
+DEFAULT_PLANTS = 90
+FOOD_RESPAWN_DELAY = (30.0, 60.0)
 BITE_REACH = 7.0
 
 
@@ -22,6 +23,7 @@ class Food:
     y: float
     energy: float
     renewable: bool = True
+    respawn_in: float = 0.0
 
 
 def make_space() -> pymunk.Space:

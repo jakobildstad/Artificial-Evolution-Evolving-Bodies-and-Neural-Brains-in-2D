@@ -1,6 +1,7 @@
 """Heritable geometry and fixed-size recurrent neural weights."""
 
 from dataclasses import dataclass
+from importlib.resources import files
 
 import numpy as np
 
@@ -23,6 +24,19 @@ class Genome:
     output_weights: np.ndarray
     hidden_bias: np.ndarray
     output_bias: np.ndarray
+
+    @classmethod
+    def pretrained(cls) -> "Genome":
+        """Load the bundled foraging prior without consuming the world's random stream."""
+        genome = cls.ancestral(np.random.default_rng(0))
+        path = files("artificial_evolution").joinpath("data/ancestor.npz")
+        with path.open("rb") as file, np.load(file, allow_pickle=False) as weights:
+            for index, array in enumerate(genome.arrays()):
+                trained = weights[f"weights_{index}"]
+                if trained.shape != array.shape or not np.isfinite(trained).all():
+                    raise ValueError("Invalid pretrained brain weights")
+                array[:] = trained
+        return genome
 
     @classmethod
     def ancestral(cls, rng: np.random.Generator) -> "Genome":

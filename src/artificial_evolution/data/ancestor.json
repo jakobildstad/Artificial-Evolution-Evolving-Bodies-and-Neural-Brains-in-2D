@@ -1,0 +1,8 @@
+{
+  "method": "offline synthetic foraging imitation",
+  "seed": 42,
+  "steps": 3000,
+  "batch_size": 512,
+  "validation_mse": 0.002179351294320968,
+  "limitations": "A foraging prior, not a guarantee of ecosystem survival."
+}

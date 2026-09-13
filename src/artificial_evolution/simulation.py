@@ -6,10 +6,11 @@ import pymunk
 from .creature import Creature
 from .ecology import (
     BITE_REACH,
+    DEFAULT_PLANTS,
     DT,
     FOOD_CAPACITY,
+    FOOD_RESPAWN_DELAY,
     HEIGHT,
-    REGROWTH,
     WIDTH,
     Food,
     consume,
@@ -22,7 +23,12 @@ from .genome import Genome
 
 class Simulation:
     def __init__(
-        self, seed: int = 1, population: int = 24, plants: int = 260, max_population: int = 180
+        self,
+        seed: int = 1,
+        population: int = 24,
+        plants: int = DEFAULT_PLANTS,
+        max_population: int = 180,
+        brain: str = "pretrained",
     ):
         if not 0 <= population <= max_population or max_population < 1 or plants < 0:
             raise ValueError("Require 0 <= population <= max_population and plants >= 0")
@@ -39,7 +45,10 @@ class Simulation:
         self.deaths = 0
         self.energy_input = 0.0
         self.dissipated = 0.0
-        self.ancestor = Genome.ancestral(self.rng)
+        if brain not in ("pretrained", "random"):
+            raise ValueError("Brain must be 'pretrained' or 'random'")
+        self.brain_source = brain
+        self.ancestor = Genome.pretrained() if brain == "pretrained" else Genome.ancestral(self.rng)
         for _ in range(population):
             for attempt in range(1000):
                 position = (
@@ -136,7 +145,13 @@ class Simulation:
                 return child
         return None
 
-    def feed(self, eater: Creature, dt: float, nearby_food: list[Food] | None = None) -> None:
+    def feed(
+        self,
+        eater: Creature,
+        dt: float,
+        nearby_food: list[Food] | None = None,
+        nearby_creatures: list[Creature] | None = None,
+    ) -> None:
         """One mouth and one bite budget for every creature, regardless of ancestry."""
         budget = max(0.0, float(eater.actions[2])) * 40 * dt
         if budget <= 0 or eater.energy <= 0 or eater.tissue <= 0:
@@ -153,7 +168,7 @@ class Simulation:
                 self.dissipated += loss
         if budget <= 0:
             return
-        for victim in self.creatures.values():
+        for victim in self.creatures.values() if nearby_creatures is None else nearby_creatures:
             if victim is eater or victim.tissue <= 0:
                 continue
             if (mouth - victim.body.position).length > victim.radius + BITE_REACH:
@@ -196,11 +211,11 @@ class Simulation:
             creature.body.apply_force_at_local_point((float(thrust) * 85 * width, 0), (0, 0))
             creature.body.torque += float(turn) * 400 * width
             # Larger bodies pay upkeep and actuation costs, and have greater inertia.
+            # Gradual aging avoids killing all successful founders at the same instant.
             cost = DT * (
-                0.3
-                + creature.genome.area * 0.002
-                + creature.body.mass * (abs(thrust) * 0.2 + abs(turn) * 0.1)
-                + max(0, bite) * 0.12
+                (0.15 + creature.genome.area * 0.001) * (1 + creature.age / 600)
+                + creature.body.mass * (abs(thrust) * 0.1 + abs(turn) * 0.05)
+                + max(0, bite) * 0.06
             )
             spent = min(creature.energy, cost)
             creature.energy -= spent
@@ -214,24 +229,43 @@ class Simulation:
             mouths = np.array([tuple(c.mouth) for c in feeders])
             food_points = np.array([(f.x, f.y) for f in self.food]).reshape(-1, 2)
             distances_squared = np.sum((mouths[:, None, :] - food_points[None, :, :]) ** 2, axis=2)
-            for creature, distances in zip(feeders, distances_squared):
+            centers = np.array([tuple(c.body.position) for c in residents])
+            body_distances = np.sum((mouths[:, None, :] - centers[None, :, :]) ** 2, axis=2)
+            bite_ranges = np.array([(c.radius + BITE_REACH) ** 2 for c in residents])
+            for creature, distances, body_distances_row in zip(
+                feeders, distances_squared, body_distances
+            ):
                 nearby = np.flatnonzero(distances <= (BITE_REACH + 4) ** 2)
-                self.feed(creature, DT, [self.food[i] for i in nearby])
+                neighbors = np.flatnonzero(body_distances_row <= bite_ranges)
+                self.feed(
+                    creature,
+                    DT,
+                    [self.food[i] for i in nearby],
+                    [residents[i] for i in neighbors],
+                )
         self.tick += 1
         for creature in residents:
-            if (
-                creature.energy <= 0
-                or creature.tissue < creature.genome.tissue * 0.2
-                or creature.age >= 240
-            ):
+            if creature.energy <= 0 or creature.tissue < creature.genome.tissue * 0.2:
                 self.kill(creature)
             elif self.tick % 30 == 0 and creature.actions[3] > 0:
                 self.reproduce(creature)
+        self.update_food()
+
+    def update_food(self) -> None:
+        """Consumed plants return elsewhere after a delay; carrion only decays."""
         for food in self.food:
             if food.renewable:
-                growth = min(FOOD_CAPACITY - food.energy, REGROWTH * DT)
-                food.energy += growth
-                self.energy_input += growth
+                if food.respawn_in > 0:
+                    food.respawn_in = max(0.0, food.respawn_in - DT)
+                    if food.respawn_in == 0:
+                        food.x = float(self.rng.uniform(12, WIDTH - 12))
+                        food.y = float(self.rng.uniform(12, HEIGHT - 12))
+                        food.energy = FOOD_CAPACITY
+                        self.energy_input += FOOD_CAPACITY
+                elif food.energy <= 0.01:
+                    self.dissipated += food.energy
+                    food.energy = 0.0
+                    food.respawn_in = float(self.rng.uniform(*FOOD_RESPAWN_DELAY))
             else:
                 decay = min(food.energy, food.energy * 0.008 * DT)
                 food.energy -= decay
@@ -253,6 +287,7 @@ class Simulation:
         residents = list(self.creatures.values())
         return {
             "seed": self.seed,
+            "brain": self.brain_source,
             "tick": self.tick,
             "seconds": round(self.time, 2),
             "population": len(residents),

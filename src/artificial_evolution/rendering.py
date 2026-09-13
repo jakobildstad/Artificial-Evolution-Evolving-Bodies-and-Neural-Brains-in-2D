@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pygame
 
-from .ecology import DT, FOOD_CAPACITY, HEIGHT, WIDTH
+from .ecology import DEFAULT_PLANTS, DT, FOOD_CAPACITY, FOOD_RESPAWN_DELAY, HEIGHT, WIDTH
 from .persistence import load, save
 from .simulation import Simulation
 
@@ -14,6 +14,96 @@ PANEL = 300
 BACKGROUND = (15, 23, 28)
 TEXT = (216, 230, 226)
 MUTED = (132, 156, 157)
+INFO_BUTTON = pygame.Rect(WIDTH + 211, 46, 72, 28)
+INFO_CLOSE = pygame.Rect(1110, 88, 90, 30)
+
+
+def draw_info(screen: pygame.Surface, font: pygame.font.Font, heading: pygame.font.Font) -> None:
+    """Explain mechanical tradeoffs while the world is paused behind the overlay."""
+    shade = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+    shade.fill((0, 0, 0, 185))
+    screen.blit(shade, (0, 0))
+    pygame.draw.rect(screen, (23, 34, 40), (70, 70, 1160, 590), border_radius=12)
+    screen.blit(heading.render("BODIES, BRAINS & SURVIVAL", True, TEXT), (100, 95))
+    pygame.draw.rect(screen, (49, 73, 77), INFO_CLOSE, border_radius=5)
+    screen.blit(font.render("Close", True, TEXT), (1135, 95))
+    sections = [
+        (
+            "Size & mass",
+            [
+                "More body area adds mass, edible tissue and energy capacity.",
+                "It also raises upkeep and movement costs.",
+                "More mass needs more force for the same acceleration.",
+            ],
+        ),
+        (
+            "Length & shape",
+            [
+                "Long or bent bodies change collisions and the reach of tissue.",
+                "Mass farther from the center makes turning harder.",
+                "All segments form one rigid body, without moving joints.",
+            ],
+        ),
+        (
+            "Head width & movement",
+            [
+                "The first segment sets the forward direction and mouth.",
+                "A wider head supplies more thrust and turning torque.",
+                "The brain chooses thrust, turning, biting and reproduction.",
+            ],
+        ),
+        (
+            "Segments & mutation",
+            [
+                "Bodies have 1-5 segments. Offspring can gain, lose or copy one.",
+                "Dimensions and bends can mutate along with neural weights.",
+                "Larger offspring require more parental energy to build.",
+            ],
+        ),
+        (
+            "Tissue & energy",
+            [
+                "Energy reserves fuel movement and upkeep; zero means death.",
+                "Other creatures can bite tissue and gain energy from it.",
+                "Below 20% tissue is fatal. Injury does not shrink the body.",
+            ],
+        ),
+        (
+            "Food & scarcity",
+            [
+                f"By default, {DEFAULT_PLANTS} plants are shared by the whole population.",
+                f"Eaten plants respawn elsewhere after {FOOD_RESPAWN_DELAY[0]:.0f}"
+                f"-{FOOD_RESPAWN_DELAY[1]:.0f} seconds.",
+                "Partly eaten plants never refill; rust-colored food is carrion.",
+            ],
+        ),
+        (
+            "Birth & age",
+            [
+                "Healthy, well-fed adults can reproduce after 8 seconds.",
+                "A parent pays for its child's tissue and starting energy.",
+                "Upkeep rises with age. There is no fixed lifespan.",
+            ],
+        ),
+        (
+            "Brains & colors",
+            [
+                "Founders share a pretrained foraging brain by default.",
+                "Use --brain random for an untrained ancestor. Both evolve.",
+                "Color shows generation; brightness shows energy reserves.",
+            ],
+        ),
+    ]
+    for index, (title, lines) in enumerate(sections):
+        x = 100 if index < 4 else 660
+        y = 150 + (index % 4) * 110
+        screen.blit(heading.render(title, True, (148, 207, 187)), (x, y))
+        for offset, line in enumerate(lines):
+            screen.blit(font.render(line, True, TEXT), (x, y + 28 + offset * 21))
+    screen.blit(
+        font.render("Paused while open. Click Close, or press I / Esc to return.", True, MUTED),
+        (100, 628),
+    )
 
 
 def draw(
@@ -25,6 +115,7 @@ def draw(
     font: pygame.font.Font,
     heading: pygame.font.Font,
     notice: str = "",
+    show_info: bool = False,
 ) -> None:
     screen.fill(BACKGROUND)
     for food in sim.food:
@@ -64,6 +155,8 @@ def draw(
 
     label("ARTIFICIAL EVOLUTION", 20, large=True)
     label(f"{'PAUSED' if paused else 'LIVE'}  /  {speed}x  /  {sim.time:.1f}s", 52, MUTED)
+    pygame.draw.rect(screen, (49, 73, 77), INFO_BUTTON, border_radius=5)
+    screen.blit(font.render("i  Info", True, TEXT), (INFO_BUTTON.x + 13, INFO_BUTTON.y + 6))
     stats = sim.stats()
     for y, text in zip(
         range(90, 216, 25),
@@ -122,7 +215,9 @@ def draw(
         ],
     ):
         label(text, y)
-    label(notice[:35] if notice else f"Seed {sim.seed}  |  fixed 60 Hz physics", 669, MUTED)
+    label(notice[:35] if notice else f"Seed {sim.seed}  |  {sim.brain_source} brain", 669, MUTED)
+    if show_info:
+        draw_info(screen, font, heading)
 
 
 def run(sim: Simulation, save_path: Path, frame_limit: int | None = None) -> Simulation:
@@ -135,6 +230,7 @@ def run(sim: Simulation, save_path: Path, frame_limit: int | None = None) -> Sim
         heading = pygame.font.Font(None, 23)
         clock = pygame.time.Clock()
         paused, running = False, True
+        info_open = False
         selected = None
         speeds, speed_index = [1, 4, 12], 0
         accumulator = 0.0
@@ -146,7 +242,14 @@ def run(sim: Simulation, save_path: Path, frame_limit: int | None = None) -> Sim
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    if event.pos[0] < WIDTH:
+                    if info_open:
+                        if INFO_CLOSE.collidepoint(event.pos):
+                            info_open = False
+                        continue
+                    if INFO_BUTTON.collidepoint(event.pos):
+                        info_open = True
+                        accumulator = 0
+                    elif event.pos[0] < WIDTH:
                         selected = next(
                             (
                                 c.id
@@ -157,7 +260,15 @@ def run(sim: Simulation, save_path: Path, frame_limit: int | None = None) -> Sim
                         )
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
-                        running = False
+                        if info_open:
+                            info_open = False
+                        else:
+                            running = False
+                    elif event.key == pygame.K_i:
+                        info_open = not info_open
+                        accumulator = 0
+                    elif info_open:
+                        continue
                     elif event.key == pygame.K_SPACE:
                         paused = not paused
                         accumulator = 0
@@ -178,7 +289,7 @@ def run(sim: Simulation, save_path: Path, frame_limit: int | None = None) -> Sim
                             notice = f"Snapshot error: {error}"
                             print(notice)
                         notice_until = time.monotonic() + 5
-            if not paused:
+            if not paused and not info_open:
                 accumulator += elapsed * speeds[speed_index]
                 # Limit work per frame; a busy desktop slows down rather than enlarging dt.
                 for _ in range(min(int(accumulator / DT), 48)):
@@ -189,11 +300,12 @@ def run(sim: Simulation, save_path: Path, frame_limit: int | None = None) -> Sim
                 screen,
                 sim,
                 selected,
-                paused,
+                paused or info_open,
                 speeds[speed_index],
                 font,
                 heading,
                 notice if time.monotonic() < notice_until else "",
+                info_open,
             )
             pygame.display.flip()
             frames += 1

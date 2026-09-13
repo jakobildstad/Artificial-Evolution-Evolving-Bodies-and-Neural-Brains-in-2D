@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+from .ecology import DEFAULT_PLANTS
 from .persistence import load, save
 from .simulation import Simulation
 
@@ -12,7 +13,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Evolving bodies and neural brains in 2D")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--population", type=int, default=24)
-    parser.add_argument("--plants", type=int, default=260)
+    parser.add_argument("--plants", type=int, default=DEFAULT_PLANTS)
+    parser.add_argument(
+        "--brain",
+        choices=("pretrained", "random"),
+        default="pretrained",
+        help="Ancestral brain for a new world (default: pretrained)",
+    )
     parser.add_argument("--max-population", type=int, default=180)
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--steps", type=int, default=3600, help="Fixed steps in a headless run")
@@ -28,7 +35,9 @@ def main() -> None:
         sim = (
             load(args.load)
             if args.load
-            else Simulation(args.seed, args.population, args.plants, args.max_population)
+            else Simulation(
+                args.seed, args.population, args.plants, args.max_population, args.brain
+            )
         )
         if args.headless:
             for _ in range(args.steps):
