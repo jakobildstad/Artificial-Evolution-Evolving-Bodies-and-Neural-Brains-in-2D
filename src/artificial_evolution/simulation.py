@@ -3,22 +3,25 @@
 import numpy as np
 import pymunk
 
+from .analysis import classify, record
 from .creature import Creature
 from .ecology import (
     BITE_REACH,
     DEFAULT_PLANTS,
     DT,
-    FOOD_CAPACITY,
-    FOOD_RESPAWN_DELAY,
+    FOOD_TYPES,
     HEIGHT,
+    PARENT_PROTECTION_TIME,
     WIDTH,
     Food,
     consume,
+    food_resistance,
     make_body,
     make_space,
-    sense,
+    sense_population,
 )
 from .genome import Genome
+from .terrain import TERRAIN_FILTER, add_islands, open_water, pond_islands, visible
 
 
 class Simulation:
@@ -29,15 +32,30 @@ class Simulation:
         plants: int = DEFAULT_PLANTS,
         max_population: int = 180,
         brain: str = "pretrained",
+        width: int = WIDTH,
+        height: int = HEIGHT,
+        islands: list | None = None,
     ):
         if not 0 <= population <= max_population or max_population < 1 or plants < 0:
             raise ValueError("Require 0 <= population <= max_population and plants >= 0")
         self.seed = seed
         self.rng = np.random.default_rng(seed)
-        self.space = make_space()
+        if width < 300 or height < 300:
+            raise ValueError("World dimensions must be at least 300")
+        self.width, self.height = width, height
+        self.islands = [
+            [list(point) for point in polygon]
+            for polygon in (pond_islands(width, height) if islands is None else islands)
+        ]
+        self.space = make_space(width, height)
+        add_islands(self.space, self.islands)
         self.creatures: dict[int, Creature] = {}
         self.food: list[Food] = []
         self.ancestry: dict[int, dict] = {}
+        self.groups = {}
+        self.history = []
+        self.run_name = f"Pond seed {seed}"
+        self.max_generation = 0
         self.max_population = max_population
         self.tick = 0
         self.next_id = 1
@@ -52,8 +70,8 @@ class Simulation:
         for _ in range(population):
             for attempt in range(1000):
                 position = (
-                    float(self.rng.uniform(40, WIDTH - 40)),
-                    float(self.rng.uniform(40, HEIGHT - 40)),
+                    float(self.rng.uniform(40, self.width - 40)),
+                    float(self.rng.uniform(40, self.height - 40)),
                 )
                 if self.clear_position(position, 28):
                     break
@@ -62,15 +80,12 @@ class Simulation:
             self.add_creature(
                 self.ancestor.copy(), position, float(self.rng.uniform(-np.pi, np.pi)), 95.0
             )
-        self.food = [
-            Food(
-                float(self.rng.uniform(12, WIDTH - 12)),
-                float(self.rng.uniform(12, HEIGHT - 12)),
-                FOOD_CAPACITY,
-            )
-            for _ in range(plants)
-        ]
+        self.food = [Food(0, 0, 0) for _ in range(plants)]
+        for food in self.food:
+            food.kind = str(self.rng.choice(list(FOOD_TYPES), p=(0.4, 0.2, 0.2, 0.2)))
+            self.respawn_food(food)
         self.initial_energy = self.total_energy()
+        record(self)
 
     @property
     def time(self) -> float:
@@ -95,12 +110,15 @@ class Simulation:
             energy,
             genome.tissue,
         )
+        creature.group_id = classify(genome, self.groups, self.time)
+        self.max_generation = max(self.max_generation, creature.generation)
         self.creatures[creature.id] = creature
         self.ancestry[creature.id] = {
             "parent_id": creature.parent_id,
             "generation": creature.generation,
             "born": self.time,
             "died": None,
+            "group_id": creature.group_id,
         }
         self.next_id += 1
         return creature
@@ -108,8 +126,9 @@ class Simulation:
     def clear_position(self, position: tuple[float, float], radius: float) -> bool:
         x, y = position
         return (
-            radius + 5 < x < WIDTH - radius - 5
-            and radius + 5 < y < HEIGHT - radius - 5
+            radius + 5 < x < self.width - radius - 5
+            and radius + 5 < y < self.height - radius - 5
+            and open_water(self.space, position, radius + 4)
             and all(
                 (c.body.position - position).length > radius + c.radius + 4
                 for c in self.creatures.values()
@@ -127,7 +146,8 @@ class Simulation:
         ):
             return None
         genome = parent.genome.mutated(self.rng)
-        reserve = genome.tissue * 1.6
+        # Every newborn needs a minimum reserve, reducing the reward for tiny bodies.
+        reserve = 24 + genome.tissue * 1.1
         cost = genome.tissue + reserve
         if parent.energy - cost < parent.capacity * 0.2:
             return None
@@ -152,8 +172,8 @@ class Simulation:
         nearby_food: list[Food] | None = None,
         nearby_creatures: list[Creature] | None = None,
     ) -> None:
-        """One mouth and one bite budget for every creature, regardless of ancestry."""
-        budget = max(0.0, float(eater.actions[2])) * 40 * dt
+        """Share one bite budget across food and eligible living tissue."""
+        budget = max(0.0, float(eater.actions[2])) * 40 * eater.strength * dt
         if budget <= 0 or eater.energy <= 0 or eater.tissue <= 0:
             return
         mouth = eater.mouth
@@ -162,22 +182,37 @@ class Simulation:
             if budget <= 0:
                 break
             if (mouth - (food.x, food.y)).length <= BITE_REACH + 4:
-                removed, loss = consume(eater, food.energy, budget)
+                if not visible(self.space, mouth, (food.x, food.y)):
+                    continue
+                resistance = food_resistance(food, eater)
+                removed, loss = consume(eater, food.energy, budget / resistance)
                 food.energy -= removed
-                budget -= removed
+                budget -= removed * resistance
                 self.dissipated += loss
+                if food.renewable:
+                    eater.plant_eaten += removed
+                    eater.food_eaten[food.kind] = eater.food_eaten.get(food.kind, 0) + removed
+                else:
+                    eater.meat_eaten += removed
         if budget <= 0:
             return
         for victim in self.creatures.values() if nearby_creatures is None else nearby_creatures:
             if victim is eater or victim.tissue <= 0:
                 continue
+            # Give newborns time to disperse; unrelated predators still pose a risk.
+            if victim.parent_id == eater.id and victim.age < PARENT_PROTECTION_TIME:
+                continue
             if (mouth - victim.body.position).length > victim.radius + BITE_REACH:
                 continue
+            if not visible(self.space, mouth, victim.body.position):
+                continue
             if any(shape.point_query(mouth).distance <= BITE_REACH for shape in victim.shapes):
-                removed, loss = consume(eater, victim.tissue, budget)
+                resistance = max(1.0, victim.armor / eater.strength)
+                removed, loss = consume(eater, victim.tissue, budget / resistance)
                 victim.tissue -= removed
-                budget -= removed
+                budget -= removed * resistance
                 self.dissipated += loss
+                eater.meat_eaten += removed
                 if budget <= 0:
                     break
 
@@ -189,6 +224,7 @@ class Simulation:
                 creature.body.position.y,
                 creature.energy + creature.tissue,
                 False,
+                kind="carrion",
             )
         )
         self.space.remove(*creature.shapes, creature.body)
@@ -199,27 +235,40 @@ class Simulation:
     def step(self) -> None:
         residents = list(self.creatures.values())
         if self.tick % 6 == 0:
-            food_positions = np.array([(f.x, f.y) for f in self.food if f.energy > 1])
-            positions = np.array([tuple(c.body.position) for c in residents]).reshape(-1, 2)
-            for index, creature in enumerate(residents):
-                creature.think(sense(creature, food_positions, np.delete(positions, index, axis=0)))
+            food_positions = np.array([(f.x, f.y) for f in self.food if f.energy > 0.5])
+            inputs = sense_population(
+                residents, food_positions, self.width, self.height, self.space
+            )
+            for creature, inputs in zip(residents, inputs):
+                creature.think(inputs)
         for creature in residents:
             thrust, turn, bite, _ = creature.actions
             creature.age += DT
             creature.cooldown = max(0.0, creature.cooldown - DT)
             width = creature.genome.segments[0].width / 10
-            creature.body.apply_force_at_local_point((float(thrust) * 85 * width, 0), (0, 0))
+            creature.body.apply_force_at_local_point(
+                (float(thrust) * creature.motor_force, 0), (0, 0)
+            )
             creature.body.torque += float(turn) * 400 * width
             # Larger bodies pay upkeep and actuation costs, and have greater inertia.
             # Gradual aging avoids killing all successful founders at the same instant.
             cost = DT * (
-                (0.15 + creature.genome.area * 0.001) * (1 + creature.age / 600)
+                (0.15 + creature.area * 0.001) * (1 + creature.age / 600)
                 + creature.body.mass * (abs(thrust) * 0.1 + abs(turn) * 0.05)
                 + max(0, bite) * 0.06
             )
             spent = min(creature.energy, cost)
             creature.energy -= spent
             self.dissipated += spent
+            # Well-fed tissue can recover; injuries cost energy rather than permanent infertility.
+            repair = min(
+                creature.genome.tissue - creature.tissue,
+                DT * creature.genome.tissue * 0.02,
+                max(0, creature.energy - creature.capacity * 0.6) * 0.8,
+            )
+            creature.tissue += repair
+            creature.energy -= repair / 0.8
+            self.dissipated += repair * 0.25
         self.space.step(DT)
         # Rotate feeding priority to avoid a persistent advantage for older IDs.
         if residents:
@@ -250,6 +299,29 @@ class Simulation:
             elif self.tick % 30 == 0 and creature.actions[3] > 0:
                 self.reproduce(creature)
         self.update_food()
+        if self.tick % 60 == 0:
+            record(self)
+
+    def respawn_food(self, food: Food) -> None:
+        """Resample open water with broad habitat biases, never fixed resource patches."""
+        for _ in range(2000):
+            x = float(self.rng.uniform(12, self.width - 12))
+            y = float(self.rng.uniform(12, self.height - 12))
+            # Overlapping preferences leave every basin habitable and connected.
+            favored = {
+                "algae": x < self.width * 0.45,
+                "seed": x > self.width * 0.60,
+                "weed": 0.3 * self.width < x < 0.75 * self.width,
+                "plankton": 0.25 * self.height < y < 0.8 * self.height,
+            }[food.kind]
+            if self.rng.random() < (1 if favored else 0.25) and open_water(self.space, (x, y), 12):
+                food.x, food.y = x, y
+                break
+        else:
+            raise ValueError("No open water available for food")
+        kind = FOOD_TYPES[food.kind]
+        food.energy, food.hardness = kind.energy, kind.hardness
+        food.drift_angle = float(self.rng.uniform(-np.pi, np.pi))
 
     def update_food(self) -> None:
         """Consumed plants return elsewhere after a delay; carrion only decays."""
@@ -258,14 +330,24 @@ class Simulation:
                 if food.respawn_in > 0:
                     food.respawn_in = max(0.0, food.respawn_in - DT)
                     if food.respawn_in == 0:
-                        food.x = float(self.rng.uniform(12, WIDTH - 12))
-                        food.y = float(self.rng.uniform(12, HEIGHT - 12))
-                        food.energy = FOOD_CAPACITY
-                        self.energy_input += FOOD_CAPACITY
-                elif food.energy <= 0.01:
+                        self.respawn_food(food)
+                        self.energy_input += food.energy
+                elif food.energy <= 0.5:
+                    # Recycle invisible crumbs instead of leaving unusable plant slots.
                     self.dissipated += food.energy
                     food.energy = 0.0
-                    food.respawn_in = float(self.rng.uniform(*FOOD_RESPAWN_DELAY))
+                    food.respawn_in = float(self.rng.uniform(*FOOD_TYPES[food.kind].respawn))
+                elif food.kind == "plankton":
+                    # Passive drift provides a moving resource without scripted prey brains.
+                    direction = pymunk.Vec2d(1, 0).rotated(food.drift_angle)
+                    start = pymunk.Vec2d(food.x, food.y)
+                    end = start + direction * (12 * DT)
+                    hit = self.space.segment_query_first(start, end, 5, TERRAIN_FILTER)
+                    if hit is None:
+                        food.x, food.y = end
+                    else:
+                        direction -= 2 * direction.dot(hit.normal) * hit.normal
+                        food.drift_angle = direction.angle
             else:
                 decay = min(food.energy, food.energy * 0.008 * DT)
                 food.energy -= decay
@@ -293,7 +375,9 @@ class Simulation:
             "population": len(residents),
             "births": self.births,
             "deaths": self.deaths,
-            "max_generation": max((a["generation"] for a in self.ancestry.values()), default=0),
+            "max_generation": self.max_generation,
+            "groups": len({c.group_id for c in residents}),
+            "mean_area": round(float(np.mean([c.area for c in residents])), 2) if residents else 0,
             "mean_segments": round(float(np.mean([len(c.genome.segments) for c in residents])), 2)
             if residents
             else 0,

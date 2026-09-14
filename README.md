@@ -1,10 +1,8 @@
 # Artificial Evolution: Evolving Bodies and Neural Brains in 2D
 
-A runnable desktop artificial-life experiment: creatures evolve their bodies and
-small recurrent neural brains through mutation, competition, and reproduction.
-There are no predefined species or predator controllers. Every founder receives
-an independent copy of the same ancestral genome, with a pretrained foraging brain
-by default. Use `--brain random` to start with random weights instead.
+A desktop artificial-life pond where bodies and recurrent neural brains evolve
+through mutation, competition, and reproduction. Every founder shares one ancestral
+genome. There are no predefined species or scripted predator controllers.
 
 ## Install and run
 
@@ -15,158 +13,113 @@ uv sync
 uv run artificial-evolution
 ```
 
-`.python-version` selects Python 3.12; uv manages the interpreter and `.venv`.
-`pyproject.toml` declares dependencies and `uv.lock` pins their resolved versions.
-The desktop needs a graphical session. Headless runs do not initialize pygame:
+uv manages Python 3.12, the virtual environment, and the dependencies pinned in
+`uv.lock`. The only runtime libraries are Pymunk, pygame-ce, and NumPy.
 
 ```sh
-uv run artificial-evolution --headless --seed 1 --steps 18000 --save saves/run.json
-uv run artificial-evolution --load saves/run.json
-uv run artificial-evolution --headless --load saves/run.json --steps 600
-uv run artificial-evolution --brain pretrained --plants 90
-uv run artificial-evolution --brain random --seed 2
-uv run python -m artificial_evolution --seed 2 --population 30 --plants 60
+uv run artificial-evolution --brain random                 # untrained ancestor
+uv run artificial-evolution --plants 150                   # scarcer food
+uv run artificial-evolution --save-dir saves/experiments    # desktop run folder
+uv run artificial-evolution --headless --seed 1 --steps 36000 \
+  --name "Reed pond" --save "saves/Reed pond.json"
+uv run artificial-evolution --load "saves/Reed pond.json"
 uv run pytest
 uv run ruff check .
 ```
 
-Verified on macOS with Python 3.12: fifteen tests cover inheritance, energy accounting,
-food relocation, save/load, pretrained foraging, and desktop controls including Info.
-In solo physics checks, pretrained founders starting with 30 energy survived 200
-seconds on seeds 11–13 and replenished their reserves. This establishes basic
-foraging ability, not guaranteed ecosystem survival or long-term diversity.
-Ten-minute ecosystem checks with the new defaults left 36, 15, and 8 creatures
-alive on seeds 1, 2, and 3 respectively, reaching generations 28, 45, and 18.
-
-Headless `--steps` counts **additional** 1/60-second steps and prints JSON statistics.
-Defaults are 90 plants, 24 creatures, and a 180-creature population cap. `--plants`
-changes scarcity. A loaded snapshot supplies its own population, food and brains;
-initialization flags such as `--seed`, `--plants`, and `--brain` only apply to new worlds.
-There is no automatic
-repopulation after extinction. Try different seeds and resource densities.
+Defaults: pretrained brain, 24 founders, 220 renewable food slots, and a
+180-creature population cap. Headless runs do not initialize pygame;
+`--steps` counts additional 1/60-second
+steps. Initialization flags such as `--brain`, `--seed`, and `--plants` apply to new
+worlds. Loaded runs retain their stored map, organisms, and food. Extinct populations
+are not automatically repopulated.
 
 ## Controls
 
 | Control | Action |
 | --- | --- |
-| Space | Pause/resume |
-| Tab | Cycle requested speed: 1×, 4×, 12× |
-| N | Advance one physics step while paused |
-| Left click | Inspect a creature, its actions, and recent ancestor IDs |
-| Info button / I | Open/close explanations of physical traits and ecology; pauses the world |
-| S / L | Save/load `saves/world.json` (override with `--save-path`) |
-| Esc / close window | Esc closes Info first; otherwise quit. `--save PATH` writes final state |
+| Space / Tab | Pause/resume / cycle requested speed: 1×, 4×, 12× |
+| N | One physics step while paused |
+| Left click | Inspect a creature; click the minimap to look elsewhere |
+| Mouse wheel / + / - | Zoom (the wheel anchors the world under the cursor) |
+| Right/middle drag / arrow keys | Pan the camera |
+| Home / F | Fit the whole pond / focus the selected creature |
+| Analyze pond / A | Open population charts, groups, and brain analysis |
+| B | Open the selected creature's brain |
+| Info / I | Explain physical traits and ecology |
+| Save run / S | Enter a run name; Enter saves, Esc cancels |
+| Load run / L | Choose a saved run with clicks, arrows, or scrolling; Enter opens |
+| Esc | Close the current overlay, or quit the simulation |
 
-Green dots are renewable plants; rust dots are carrion. The yellow mouth marker
-shows the sensor/motor frame. Creature color indicates generation, with brightness
-showing energy. The panel reports population, births, deaths, and body statistics.
-Snapshots retain parent IDs, birth/death times, and generations for every creature,
-including dead ancestors. Founders have no parent and share the stored ancestor genome.
+Overlays pause the world and preserve the previous pause state. In analysis,
+1/2/3/4 or Tab switches pages. Click a group to inspect a member's brain. Left/Right
+browses living brains; scrolling browses longer group lists.
 
-## Ecosystem and evolution
+Saving writes `Your run.json`, `Your run.population.csv`, and `Your run.groups.csv`
+in the chosen folder. The JSON contains the world, current brains, ancestry, group
+prototypes, and population history. CSV files are convenient for outside analysis.
+An existing name requires a second confirmation before replacement. Ctrl/Cmd+A
+selects the proposed name. `--save PATH` also saves on exit, including CSV reports.
 
-- Pymunk simulates a bounded, top-down arena without gravity. Each creature is one
-  rigid body composed of 1–5 connected rectangles. Mutations resize, bend, add,
-  remove, or duplicate segments. Geometry affects collisions, mass, rotational
-  inertia, tissue, energy capacity, upkeep, and motor cost. The first segment
-  defines the mouth, forward axis, and motor scale, regardless of segment count.
-- A NumPy recurrent network has 16 inputs, 12 memory units, and 4 tanh outputs:
-  signed thrust, signed turning, positive bite effort, and reproduction request.
-  It runs at 10 Hz; actions are held between decisions. Inputs are nearest edible
-  resource and creature direction/proximity (two body-relative channels each),
-  four body-relative wall proximities, energy, tissue, local forward/lateral
-  velocity, angular velocity, age, reproduction cooldown, and a constant bias.
-  Resource sensing combines plants and carrion. Memory starts at zero at birth.
-- Founders share the bundled pretrained weights, or random weights with general
-  activity biases when selected. Offspring inherit sparse Gaussian weight mutations
-  and occasional geometry mutations. During simulation there is no optimizer,
-  fitness score, crossover, speciation, or scripted controller overriding the brain.
-- Positive bite effort can consume nearby plants, carrion, or another creature's
-  tissue. One bite budget is shared across all targets. Digestion transfers 80%
-  into reserves and dissipates the rest. Feeding order rotates each step. Tissue
-  damage can kill a creature; attacking can yield energy and remove a competitor.
-- A mature creature requesting reproduction needs sufficient energy, healthy
-  tissue, an expired cooldown, and free space. The parent pays **all** child tissue
-  and starting reserve energy. Unaffordable or crowded births are skipped.
-- Upkeep and motor activity drain reserves. Upkeep increases gradually with age;
-  there is no fixed lifespan. Starvation or severe tissue loss causes death, leaving
-  tissue and reserves as decaying carrion. Fully eaten plants disappear for 30–60
-  seconds, then return at independently sampled random positions with full energy.
-  Partially eaten plants do not refill, so revisiting a spot cannot harvest regrowth.
-  The number of plant slots stays fixed, including those awaiting respawn. The
-  reported energy balance checks `stored + dissipated = initial + new plant energy`,
-  including reproduction and death.
+## The pond
 
-## Pretrained ancestor
+New runs use a **1600×1100** map with islands and open channels between three
+basins. Migration requires navigation and energy. Islands block movement, sight,
+and bites. Old saves keep their original smaller, open map; start a new run to
+explore the islands.
 
-`data/ancestor.npz` contains one small NumPy recurrent network fitted offline to
-synthetic foraging examples: turn toward sensed food, slow near food and walls,
-and enable biting and reproduction. Randomized memory states teach robust immediate
-responses; this is imitation learning, not reinforcement learning or a learned
-long-term memory strategy. The teacher exists only in `pretrain.py`; all live actions
-come from inherited neural weights. This gives evolution a foraging starting point
-and intentionally biases the ancestor toward gathering food. Predation is not taught.
+| Food | Energy | Respawn | Mechanical opportunity |
+| --- | --- | --- | --- |
+| Soft algae | 10 | 18–32 s | Small, easy meals suit low-upkeep bodies |
+| Armored seeds | 42 | 55–85 s | Strong bites process hard shells faster |
+| Fibrous waterweed | 30 | 35–55 s | Extra segments improve processing |
+| Drifting plankton | 16 | 20–40 s | Moving food rewards effective movement |
 
-Rebuild the bundled model from the repository root (no extra dependencies):
+Food respawns at random open-water locations with overlapping habitat preferences.
+All creatures can eat every food type, live tissue, and carrion. Parents cannot bite
+their own living offspring for **10 simulated seconds** after birth. Reproduction
+transfers the cost of all offspring tissue and reserves from the parent.
 
-```sh
-uv run python -m artificial_evolution.pretrain --seed 42 --steps 3000
-```
+Bodies mutate in size, shape, and segment count alongside recurrent neural weights.
+Larger bodies gain bite strength and reserves but pay greater upkeep and birth
+costs. Founders share one pretrained foraging brain by default; `--brain random`
+starts with an untrained ancestor. Live behavior always comes from inherited brains.
 
-The script trains all weight arrays with NumPy gradients and Adam, writes the weights,
-and records settings and held-out example error in `data/ancestor.json`. The shipped
-model's validation mean squared error is about 0.00218. Existing saves keep their
-stored genomes; retraining affects newly created pretrained worlds only.
+The **Analyze pond** dashboard shows population graphs, genetic groups, neural
+weights and activations, food availability, and group diets. Groups are descriptive
+clusters, not predefined biological species; labels never alter behavior. Colors
+identify groups and brightness shows energy. Diet statistics describe the lifetime
+intake of current group members, including scavenged meat.
 
-## Architecture
+## Architecture and checks
 
-The `src/artificial_evolution/` package keeps responsibilities in simple modules:
+The compact `src/artificial_evolution/` package uses:
 
-| Module | Responsibility |
-| --- | --- |
-| `genome.py` | Segment geometry, ancestral weights, mutation |
-| `creature.py` | Lifetime state and recurrent brain |
-| `ecology.py` | Pymunk bodies, sensing, digestion |
-| `simulation.py` | Fixed-step loop, feeding, births, deaths, statistics, ancestry |
-| `rendering.py` | pygame-ce display, inspection, input, wall-clock accumulator |
-| `persistence.py` | Versioned JSON snapshots and RNG restoration |
-| `pretrain.py` | Reproducible offline training; bundled weights live in `data/` |
-| `__main__.py` | CLI and headless execution |
+- `genome.py`, `creature.py`: inherited bodies, brains, and lifetime state.
+- `ecology.py`, `terrain.py`, `simulation.py`: physics, resources, sensing, fixed steps.
+- `analysis.py`, `analysis_view.py`: group classification, history, graphs, CSV export.
+- `rendering.py`, `pond_view.py`, `run_dialog.py`: desktop controls, camera, named runs.
+- `persistence.py`, `__main__.py`: versioned saves and command-line execution.
+- `pretrain.py`, `data/`: reproducible offline training and bundled ancestral weights.
 
-Physics always uses 1/60 second. Rendering consumes an accumulator independently;
-overloaded desktop runs slow down instead of increasing the timestep. Randomness
-comes from one seeded NumPy generator. Repeating a fresh run with the same seed,
-versions, and platform is reproducible. Snapshots include genomes, neural memory,
-actions, positions, velocities, ecology, ancestry, counters, and RNG state.
-Pending food respawn timers and the ancestral brain source are saved as well.
-Older version-1 and version-2 snapshots still load
-and use the updated ecology; start a new world to replace an already extinct population.
+Physics advances at 60 Hz and brain decisions at 10 Hz, independently of rendering.
+Tests cover inheritance, energy accounting, offspring protection, save/load,
+resource tradeoffs, terrain connectivity, sensors, analysis, and desktop controls.
+Ten-minute runs on three seeds retained 28–35 creatures across 5–7 groups; this is
+an experiment, not a guarantee of lasting diversity.
 
-## Simplifications and limitations
+## Limitations
 
-This is a small research toy, not a claim that complex strategies will reliably
-evolve. Even a pretrained ancestor can fail under competition; extinction is possible.
-Long-lived diversity and specialized predation are outcomes to investigate, not
-guaranteed features. All animals share one mouth and two body-level motors; bodies
-are rigid compounds without articulated limbs. Rectangles can overlap at bends;
-overlap counts as tissue and mass. Tissue damage reduces health but does not shrink
-collision shapes or change mass before death. Tissue does not heal.
+Bodies are rigid compounds, food has no physical collider, and plankton is a drifting
+particle. Brains sense the nearest visible food but not its type. Units and ecological
+tradeoffs are simplified. Extinction and selection for small bodies remain possible.
+The 1300×700 window supports camera zoom but is not resizable. Save/load reconstructs
+Pymunk contacts, so resumed collision trajectories may differ slightly. Camera state
+resets on load; old saves lack historical food-type intake.
 
-Sensing uses the nearest resource/creature within 180 units, without occlusion.
-Food is a point with a small feeding radius, not a physical collider. Each plant
-stays still until depleted; its replacement appears elsewhere. Nearby food is
-consumed before live tissue; there is no dietary trait. Thrust, energy costs, aging,
-and digestion use arbitrary game units, not a biological or thermodynamic calibration.
-Crowd limits and conservative
-birth clearance bound cost and may bias selection against large bodies.
+See the [simulation guide](docs/simulation.md) for detailed mechanics, analysis,
+pretraining, persistence, and verification notes.
 
-Pymunk contact caches are reconstructed on load, so resumed collision trajectories
-can diverge slightly from uninterrupted runs; saves are not bit-exact physics
-checkpoints. JSON saves are intended for this version's own snapshots. Sensing and
-feeding use NumPy distance checks and nearby geometry queries, suitable for hundreds
-rather than thousands of creatures; ancestry and snapshots grow with total births.
-The fixed 1300×700 window has no zoom or resizing. Model weights are bundled;
-no server, GPU, or external services are required.
+## License
 
-Physics construction follows the [Pymunk API](https://www.pymunk.org/en/latest/pymunk.html);
-the only runtime libraries are Pymunk, pygame-ce, and NumPy.
+[MIT](LICENSE), copyright 2026 Jakob Ildstad.

@@ -5,9 +5,9 @@ import pytest
 
 from artificial_evolution.ecology import (
     DT,
-    FOOD_CAPACITY,
-    FOOD_RESPAWN_DELAY,
+    FOOD_TYPES,
     HEIGHT,
+    PARENT_PROTECTION_TIME,
     WIDTH,
     Food,
     make_body,
@@ -75,6 +75,55 @@ def test_biting_live_tissue_and_death_conserve_energy():
     assert sim.total_energy() + sim.dissipated == pytest.approx(before)
 
 
+@pytest.mark.parametrize("restore", [False, True])
+def test_parent_cannot_bite_child_until_grace_period_expires(tmp_path, restore):
+    sim = Simulation(population=1, plants=0)
+    parent = next(iter(sim.creatures.values()))
+    parent.body.position, parent.body.angle = (400, 350), 0
+    sim.space.reindex_shapes_for_body(parent.body)
+    parent.energy = 10
+    parent.actions[2] = 1
+    child = sim.add_creature(parent.genome.copy(), (421, 350), 0, 40, parent)
+    tissue = child.tissue
+    before = sim.total_energy() + sim.dissipated
+
+    for age in (0, PARENT_PROTECTION_TIME - DT):
+        child.age = age
+        if restore:
+            path = tmp_path / "young-family.json"
+            save(sim, path)
+            sim = load(path)
+            parent, child = sim.creatures[parent.id], sim.creatures[child.id]
+        sim.feed(parent, 1)
+        assert child.tissue == tissue
+        assert parent.energy == 10
+        assert parent.meat_eaten == 0
+        assert sim.total_energy() + sim.dissipated == pytest.approx(before)
+
+    child.age = PARENT_PROTECTION_TIME
+    sim.feed(parent, 1)
+    assert child.tissue < tissue
+    assert parent.energy > 10
+    assert sim.total_energy() + sim.dissipated == pytest.approx(before)
+
+
+def test_newborn_can_still_be_bitten_by_an_unrelated_creature():
+    sim = Simulation(population=2, plants=0)
+    parent, predator = sim.creatures.values()
+    predator.body.position, predator.body.angle = (400, 350), 0
+    sim.space.reindex_shapes_for_body(predator.body)
+    predator.energy = 10
+    predator.actions[2] = 1
+    child = sim.add_creature(parent.genome.copy(), (421, 350), 0, 40, parent)
+    tissue = child.tissue
+    before = sim.total_energy() + sim.dissipated
+    sim.feed(predator, DT, nearby_creatures=[child])
+    assert child.age == 0
+    assert child.tissue < tissue
+    assert predator.energy > 10
+    assert sim.total_energy() + sim.dissipated == pytest.approx(before)
+
+
 def test_plant_digestion_capacity_without_regrowth_in_place():
     sim = Simulation(population=1, plants=0)
     eater = next(iter(sim.creatures.values()))
@@ -139,7 +188,9 @@ def test_food_respawns_elsewhere_and_restores_pending_timer(tmp_path):
     sim.initial_energy = sim.total_energy()
     sim.update_food()
     assert plant.energy == 0
-    assert FOOD_RESPAWN_DELAY[0] <= plant.respawn_in <= FOOD_RESPAWN_DELAY[1]
+    assert (
+        FOOD_TYPES[plant.kind].respawn[0] <= plant.respawn_in <= FOOD_TYPES[plant.kind].respawn[1]
+    )
     assert (plant.x, plant.y) == old_position
     assert sim.energy_input == 0
 
@@ -151,10 +202,10 @@ def test_food_respawns_elsewhere_and_restores_pending_timer(tmp_path):
         sim.step()
         restored.step()
     assert snapshot(restored) == snapshot(sim)
-    assert plant.energy == FOOD_CAPACITY
+    assert plant.energy == pytest.approx(FOOD_TYPES[plant.kind].energy)
     assert (plant.x, plant.y) != old_position
     assert 12 <= plant.x <= WIDTH - 12 and 12 <= plant.y <= HEIGHT - 12
-    assert sim.energy_input == FOOD_CAPACITY
+    assert sim.energy_input == plant.energy
     carrion = sim.food[1]
     assert (carrion.x, carrion.y) == (100, 200)
     assert 0 < carrion.energy < 10
