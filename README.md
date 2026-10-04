@@ -4,6 +4,37 @@ A desktop artificial-life pond where bodies and recurrent neural brains evolve
 through mutation, competition, and reproduction. Every founder shares one ancestral
 genome. There are no predefined species or scripted predator controllers.
 
+## Screenshots
+
+The pond, with evolving creatures, food, islands, and vegetation:
+
+![Pond overview with creatures, habitats, and population statistics](docs/images/Screenshot%202026-10-04%20at%2022.27.26.png)
+
+<details>
+<summary>Explore the population, groups, brain, food, and traits dashboards</summary>
+
+**Population:** population history, group abundance, and body-size distributions.
+
+![Population dashboard with history charts and body-size distribution](docs/images/Screenshot%202026-10-04%20at%2022.27.43.png)
+
+**Groups:** genetic groups and their population, body, and diet statistics.
+
+![Genetic groups dashboard comparing population and body statistics](docs/images/Screenshot%202026-10-04%20at%2022.27.54.png)
+
+**Brain:** neural weights, recurrent memory, sensor inputs, and actions.
+
+![Brain inspector showing neural weights, memory, sensors, and action values](docs/images/Screenshot%202026-10-04%20at%2022.28.01.png)
+
+**Food:** resource availability over time and recorded diets by group.
+
+![Food dashboard showing resource history and lifetime intake by group](docs/images/Screenshot%202026-10-04%20at%2022.28.09.png)
+
+**Traits:** body composition, digestive investments, habitat use, and offspring.
+
+![Traits dashboard comparing body composition, food investments, and offspring](docs/images/Screenshot%202026-10-04%20at%2022.28.24.png)
+
+</details>
+
 ## Install and run
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then:
